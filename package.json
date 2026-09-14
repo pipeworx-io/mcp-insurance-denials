@@ -1,0 +1,27 @@
+{
+  "name": "@pipeworx/mcp-insurance-denials",
+  "version": "0.1.0",
+  "description": "US health-insurance claim denials and appeal outcomes, by insurer.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "bin": {
+    "mcp-insurance-denials": "bin/cli.js"
+  },
+  "keywords": ["mcp", "mcp-server", "model-context-protocol", "pipeworx", "insurance-denials"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pipeworx-io/mcp-insurance-denials.git"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
