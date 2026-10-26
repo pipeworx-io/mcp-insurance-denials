@@ -66,50 +66,70 @@ interface McpToolExport {
  *     market selects issuers rather than carving up their numbers.
  *
  * REFRESH: annual. `node scripts/refresh-insurance-denials.mjs` regenerates
- * src/data.json from the current CMS file; bump PLAN_YEAR with it.
+ * src/data.json from the current CMS file; bump PLAN_YEAR with it. Then
+ * `node mcps/insurance-denials/scripts/bake-index-data.mjs` regenerates the
+ * baked index module (below) from the new data.json.
+ *
+ * fleet #3615: the issuer table used to be a plain JSON import at module
+ * scope (`import raw from './data.json'`), so every gateway isolate carried
+ * the full ~177KB table whether or not it ever served an insurance-denials
+ * call. It is now a BAKED INDEX in src/insurance-denials-index-data.ts
+ * (generated from data.json by scripts/bake-index-data.mjs, kept as data.json
+ * too since the annual refresh script writes that, not the .ts) — registered
+ * in workers/gateway/src/pack-baked-indexes.json, uploaded to KV at deploy,
+ * and injected as args._bakedIndex. NEVER value-import
+ * ./insurance-denials-index-data.js here again — only a type-only import is
+ * erased; a value import puts the whole table back into every isolate.
  */
 
-import raw from './data.json';
+import type { InsuranceDenialsIssuerRow } from './insurance-denials-index-data.js';
 
-interface Issuer {
-  issuer_id: string;
-  issuer_name: string | null;
-  state: string | null;
-  markets: string[];
-  claims_received_in_network: number | null;
-  claims_denied_in_network: number | null;
-  claims_received_out_of_network: number | null;
-  claims_denied_out_of_network: number | null;
-  internal_appeals_filed: number | null;
-  internal_appeals_overturned: number | null;
-  internal_appeals_percent_overturned: number | null;
-  external_appeals_filed: number | null;
-  external_appeals_overturned: number | null;
-  external_appeals_percent_overturned: number | null;
-  denial_rate_in_network_percent: number | null;
-  plan_count: number;
-}
+type Issuer = InsuranceDenialsIssuerRow;
 
-const DATA = raw as unknown as {
-  plan_year: number;
-  source: string;
-  source_url: string;
-  issuers: Issuer[];
-};
-
-const ISSUERS = DATA.issuers;
-const PLAN_YEAR = DATA.plan_year;
+/** Copied from the current data module so the tool descriptions below stay
+ *  computable without the baked index — bump this alongside the annual
+ *  refresh (scripts/refresh-insurance-denials.mjs bumps data.json's
+ *  plan_year; keep this literal in sync with it). */
+const PLAN_YEAR = 2026;
 const MARKETS = ['Individual QHP', 'Individual SADP', 'SHOP'] as const;
 
+let ISSUERS: Issuer[] = [];
+let SOURCE = '';
+let SOURCE_URL = '';
+
+/**
+ * Adopt the baked issuer table from `args._bakedIndex` (once per isolate).
+ * Loud on purpose: answering from an empty table would read as "this
+ * insurer denies nothing" or "no match", a silent wrong answer.
+ */
+function ensureIssuers(args: Record<string, unknown>): void {
+  if (ISSUERS.length) return;
+  const idx = args._bakedIndex as Record<string, unknown> | null | undefined;
+  const issuers = idx?.INSURANCE_DENIALS_ISSUERS;
+  const source = idx?.INSURANCE_DENIALS_SOURCE;
+  const sourceUrl = idx?.INSURANCE_DENIALS_SOURCE_URL;
+  if (!Array.isArray(issuers) || issuers.length === 0 || typeof source !== 'string' || typeof sourceUrl !== 'string') {
+    throw new Error(
+      `insurance-denials: the issuer table is unavailable (${idx == null ? 'not injected' : 'malformed'}). ` +
+        'The gateway loads it from KV on the first call into this pack; this is a server-side fault, not a bad query — retry shortly.',
+    );
+  }
+  ISSUERS = issuers as Issuer[];
+  SOURCE = source;
+  SOURCE_URL = sourceUrl;
+}
+
 /** Every response carries these, so a number can never be quoted year-less. */
-const PROVENANCE = {
-  plan_year: PLAN_YEAR,
-  source: DATA.source,
-  source_url: DATA.source_url,
-  scope:
-    'HealthCare.gov (federally-facilitated marketplace) issuers only — 30 states. Issuers on state-run exchanges (CA, NY, MA, WA, CO, PA, NJ and others) report to their state and are not in this federal file.',
-  caveat: 'Figures are self-reported by issuers to CMS, not audited. Values CMS suppressed are null, not zero.',
-};
+function provenance() {
+  return {
+    plan_year: PLAN_YEAR,
+    source: SOURCE,
+    source_url: SOURCE_URL,
+    scope:
+      'HealthCare.gov (federally-facilitated marketplace) issuers only — 30 states. Issuers on state-run exchanges (CA, NY, MA, WA, CO, PA, NJ and others) report to their state and are not in this federal file.',
+    caveat: 'Figures are self-reported by issuers to CMS, not audited. Values CMS suppressed are null, not zero.',
+  };
+}
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -224,11 +244,12 @@ function noMatch(args: Record<string, unknown>, what: string) {
     hint: stateIsOutOfScope
       ? `${st} runs its own health-insurance exchange, so its issuers report there rather than into the federal CMS file this tool reads. States present: ${known.join(', ')}.`
       : `No issuer matched that ${what}. Call insurer_denial_coverage to see which states and markets are present.`,
-    ...PROVENANCE,
+    ...provenance(),
   };
 }
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  ensureIssuers(args);
   switch (name) {
     case 'insurer_denial_rates': {
       const rows = rank(filtered(args), (i) => i.denial_rate_in_network_percent, args.order);
@@ -240,7 +261,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         total_matching: rows.length,
         ranked_by: 'in-network claim denial rate (%)',
         issuers: rows.slice(0, limit).map(pick),
-        ...PROVENANCE,
+        ...provenance(),
       };
     }
 
@@ -259,7 +280,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         appeal_type: external ? 'external (independent reviewer)' : 'internal (decided by the insurer)',
         ranked_by: 'percent of appeals overturned in the patient\'s favour',
         issuers: rows.slice(0, limit).map(pick),
-        ...PROVENANCE,
+        ...provenance(),
       };
     }
 
@@ -279,7 +300,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
           ? 'This insurer reports separately per state and market; each entry below is one such filing.'
           : undefined,
         issuers: rows.map(pick),
-        ...PROVENANCE,
+        ...provenance(),
       };
     }
 
@@ -302,7 +323,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         }),
         suppressed_note:
           'CMS marks figures it cannot publish with * or **; those are null here rather than 0, so an issuer with a null denial rate is unreported, not perfect.',
-        ...PROVENANCE,
+        ...provenance(),
       };
     }
 
