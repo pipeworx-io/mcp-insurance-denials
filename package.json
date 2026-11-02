@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-insurance-denials",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "US health-insurance claim denials and appeal outcomes, by insurer.",
   "type": "module",
   "main": "lib/index.js",
@@ -27,7 +27,7 @@
     "mode": "gateway",
     "slug": "insurance-denials",
     "gatewaySlug": "insurance-denials",
-    "sourceHash": "v1-a041cc7571a7cadb916d400371553ea374b993e324b13670307b3eb27064f3fb",
-    "sourceCommit": "4844029e402d6bd2fe735add8abf6d46735f8ed5"
+    "sourceHash": "v1-299dd8280cf57464b35a799e14a69037782a6dd6eb5ceb6518aa73c822b67fb3",
+    "sourceCommit": "0ca9712c0ac03bb0121cc7e81b202d0c45ac02ca"
   }
 }
